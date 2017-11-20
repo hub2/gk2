@@ -1,0 +1,180 @@
+function BaseDrawer(canvas){
+    this.canvas = canvas;
+    this.ctx = this.canvas.drawingContext;
+    this.nPrim = null;
+    this.pixels = null;
+    this.iL = [1,1,1];
+    this.L = [0,0,1];
+    this.Lp = Array(3);
+    this.sphereInterval = null;
+    this.heightMap = null;
+    this.cx = 200;
+    this.cy = 200;
+    this.r = 50;
+    this.a = 0;
+    this.h = 1;
+    this.reset();
+};
+
+BaseDrawer.prototype.reset = function(){
+    this.i = 0;
+    this.pixels = new Array(this.canvas.width*this.canvas.height);
+};
+
+BaseDrawer.prototype.setPixel = function(x, y) {
+    var x = Math.round(x);
+    var y = Math.round(y);
+    this.pixels[this.i] = Math.round((y*this.canvas.width + x)*4);
+    this.i += 1;
+};
+
+BaseDrawer.prototype.setHeightMap = function(heightMap){
+    this.heightMap = getDataFromImage(heightMap);
+};
+
+BaseDrawer.prototype.unSetHeightMap = function(){
+    this.heightMap = null;
+};
+
+BaseDrawer.prototype.setNormalMap = function(normalMap){
+    this.nPrim = getDataFromImage(normalMap);
+};
+
+BaseDrawer.prototype.unSetNormalMap = function(){
+    this.nPrim = null;
+};
+
+BaseDrawer.prototype.setSphereLight = function() {
+    if (this.sphereInterval !== null)
+        return;
+    that = this;
+    this.sphereInterval = setInterval(function(){
+        that.a += 0.1;
+        if(that.h>=200)
+            that.h=0;
+        if(that.a>=2 * Math.PI)
+        {
+            that.a=0;
+            that.h += 10;
+        }
+        var x = that.cx + that.r * Math.cos(that.a);
+        var y = that.cy + that.r * Math.sin(that.a);
+
+        that.Lp = [that.x,that.y,that.h];
+
+    }, 500);
+};
+
+BaseDrawer.prototype.unSetSphereLight = function() {
+    if(this.sphereInterval !== null)
+        clearInterval(this.sphereInterval);
+    this.sphereInterval = null;
+};
+
+BaseDrawer.prototype.getNprim = function(x, y){
+    if(this.nPrim === null)
+    {
+        return [0, 0, 1];
+    }
+    else
+    {
+        var ptr = (x%this.nPrim.width + (y%this.nPrim.height)*this.nPrim.width)*4;
+        var n = [this.nPrim.data[ptr].map(0, 255, -1, 1), this.nPrim.data[ptr+1].map(0, 255, -1, 1),
+            this.nPrim.data[ptr+2].map(0, 255, 0, 1)];
+        if(this.heightMap === null)
+        {
+            return n;
+        }
+
+        var hPtr = (x%this.heightMap.width + (y%this.heightMap.height)*this.heightMap.width)*4;
+        var hPtr_1 = ((x+1)%this.heightMap.width + (y%this.heightMap.height)*this.heightMap.width)*4;
+        var hPtr_2 = (x%this.heightMap.width + ((y+1)%this.heightMap.height)*this.heightMap.width)*4;
+
+        var nPrim = Array(3);
+        var T = [1, 0, -n[0]];
+        var B = [0, 1, -n[1]];
+        for(var i=0;i<3;i++){
+            var dhX = this.heightMap.data[hPtr_1+i] - this.heightMap.data[hPtr+i];
+            var dhY = this.heightMap.data[hPtr_2+i] - this.heightMap.data[hPtr+i];
+             nPrim[i] = n[i] + (T[i]*dhX + B[i]*dhY)*0.06;
+        }
+
+        nPrim = normalize(nPrim[0], nPrim[1], nPrim[2]);
+        return nPrim;
+    }
+};
+
+function ColorDrawer(c, canvas){
+    BaseDrawer.call(this, canvas);
+    this.color = c;
+}
+
+ColorDrawer.prototype = Object.create(BaseDrawer.prototype);
+ColorDrawer.prototype.constructor = BaseDrawer;
+
+ColorDrawer.prototype.draw = function () {
+    this.canvasData = this.ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
+    for(var iter=0;iter<this.i; iter++)
+    {
+        var y = Math.floor((this.pixels[iter]/4) / this.canvas.width);
+        var x = Math.round(this.pixels[iter]/4) % this.canvas.width;
+
+        for(var j=0;j<3;j++) {
+            var tmp = this.color.levels[j];
+            var nPrim = this.getNprim(x, y);
+            tmp = tmp * this.iL[j] * (nPrim[0]*(this.L[0]-x) + nPrim[1]*(this.L[1]-y) + nPrim[2]*this.L[2]);
+
+            this.canvasData.data[this.pixels[iter] + j] = tmp;
+        }
+
+        this.canvasData.data[this.pixels[iter] + 3] = this.color.levels[3];
+    }
+    this.ctx.putImageData(this.canvasData, 0, 0);
+
+};
+
+function ImageDrawer(img, canvas){
+    BaseDrawer.call(this, canvas);
+    this.image = getDataFromImage(img);
+    this.data = this.image.data;
+}
+
+ImageDrawer.prototype = Object.create(BaseDrawer.prototype);
+ImageDrawer.prototype.constructor = BaseDrawer;
+
+ImageDrawer.prototype.draw = function () {
+    this.canvasData = this.ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
+    for(var iter=0;iter<this.i; iter++)
+    {
+        var y = Math.floor((this.pixels[iter]/4) / this.canvas.width);
+        var x = Math.round(this.pixels[iter]/4) % this.canvas.width;
+        var ptr = (x%this.image.width + (y%this.image.height)*this.image.width)*4;
+
+        for(var j=0;j<3;j++) {
+            var tmp = this.data[ptr + j];
+            var nPrim = this.getNprim(x, y);
+            tmp = tmp * this.iL[j] * (nPrim[0]*this.L[0] + nPrim[1]*this.L[1] + nPrim[2]*this.L[2]);
+            this.canvasData.data[this.pixels[iter] + j] = tmp;
+        }
+
+        this.canvasData.data[this.pixels[iter] + 3] = this.data[ptr + 3];
+    }
+    this.ctx.putImageData(this.canvasData, 0, 0);
+};
+
+function getDataFromImage(img){
+    var tmp = document.createElement( 'canvas' );
+    tmp.width = img.width;
+    tmp.height = img.height;
+
+    var context = tmp.getContext( '2d' );
+    context.drawImage( img, 0, 0, img.width, img.height);
+
+    return context.getImageData( 0, 0, img.width, img.height );
+}
+
+function normalize(x,y,z){
+    var length = Math.sqrt(x * x + y * y + z * z);
+    return [x/length, y/length, z/length];
+}
+
